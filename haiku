@@ -1,0 +1,292 @@
+#!/usr/bin/env python3
+"""
+Kimi haiku generator – Python edition
+One topic / 12 haiku per call – self-reloads until finished
+
+pip install requests  # (only external dep)
+python haiku.py
+
+"""
+import os
+import sqlite3
+import requests
+import time
+from datetime import datetime
+
+# ---------------- CONFIG ----------------
+API_KEY     = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"  # ← your key
+DB_FILE     = "haikuclock.sqlite"
+MODEL       = "moonshot-v1-8k"
+TEMPERATURE = 0.7
+MAX_TOKENS  = 600
+# ---------------------------------------
+
+EMOTIONS = [
+    "Tranquility",
+    "Awe",
+    "Gratitude",
+    "Nostalgia",
+    "Joy",
+    "Clarity",
+    "Connectedness",
+    "Tenderness",
+    "Playfulness",
+    "Gratitude+Playfulness/Nostalgia",
+    "Gratitude+Tenderness/Clarity",
+    "Tranquility+Connectedness/Joy"
+]
+
+TOPICS = [
+    "The power of silence", "Letting go gracefully", "The art of patience",
+    "Listening without judgment", "Choosing kindness over cleverness",
+    "Learning from failure", "The value of solitude", "Trusting your inner compass",
+    "Embracing impermanence", "Saying “no” with love", "The dignity of aging",
+    "Finding joy in small things", "The wisdom of waiting", "Living with intention",
+    "The courage to begin again", "The strength in vulnerability",
+    "Knowing when to walk away", "The gift of forgiveness",
+    "Making peace with the past", "The beauty of boundaries", "Living lightly",
+    "Being present in discomfort", "The grace of humility",
+    "The discipline of daily rituals", "Choosing depth over speed",
+    "Teaching without preaching", "The legacy of laughter", "Passing down stories",
+    "Rituals that anchor memory", "The art of graceful decline",
+    "Elders as emotional architects", "Wisdom through caregiving",
+    "The role of elders in conflict resolution", "Intergenerational listening",
+    "The power of quiet presence", "Elders as spiritual mirrors",
+    "The joy of mentoring", "Legacy as emotional clarity",
+    "Aging as a spiritual practice", "The elder as a bridge",
+    "The gift of accumulated silence", "Elders as keepers of nuance",
+    "The wisdom of not knowing", "The elder’s role in grief",
+    "Teaching legacy through ritual", "Elders as stewards of emotional safety",
+    "The art of emotional inheritance", "Elders as memory weavers",
+    "The sacredness of elder touch", "The elder’s gaze: seeing beyond time",
+    "Wu wei: effortless action", "Satya: truthfulness in speech and being",
+    "Dharma: living in alignment", "Tao: the way of nature",
+    "Ubuntu: I am because we are", "Ahimsa: non-violence in thought and deed",
+    "The wisdom of the Bodhi tree", "The silence of the desert mystics",
+    "The teachings of the Gita", "Zen and the art of simplicity",
+    "The I Ching’s view of change", "Rumi’s lessons on longing",
+    "The Upanishads on self-realization", "Stoic detachment", "Sufi surrender",
+    "The wisdom of the forest hermit", "The sacred pause",
+    "The circle as a symbol of wholeness", "The firekeeper’s role in tribal memory",
+    "The breath as a teacher", "The mountain as metaphor",
+    "The river as emotional flow", "The moon as a guide to cycles",
+    "The labyrinth as inner journey", "The temple within",
+    "Emotional clarity as spiritual hygiene", "The wisdom of tears",
+    "Holding paradox with grace", "The soul’s seasonal rhythms",
+    "Listening to the body’s wisdom", "The sacredness of intuition",
+    "The emotional weight of words", "The healing power of presence",
+    "The spiritual role of conflict", "The wisdom of emotional restraint",
+    "The soul’s longing for beauty", "The emotional architecture of rituals",
+    "The sacredness of touch", "The spiritual intelligence of animals",
+    "The emotional resonance of music", "The wisdom of dreams",
+    "The role of grief in transformation", "The spiritual value of boredom",
+    "The emotional depth of silence", "The sacredness of emotional boundaries",
+    "The art of emotional stewardship", "Building trust across generations",
+    "The wisdom of shared meals", "The emotional legacy of family rituals",
+    "The role of elders in community resilience", "The power of collective mourning",
+    "The sacredness of storytelling circles", "The wisdom of communal silence",
+    "The emotional architecture of belonging", "The role of elders in spiritual conflict",
+    "The emotional clarity of shared grief", "The wisdom of communal joy",
+    "The sacredness of shared breath", "The emotional intelligence of group rituals",
+    "The role of elders in emotional repair", "Wisdom as emotional integration",
+    "The elder as a mirror of the soul", "The sacredness of endings",
+    "The emotional resonance of legacy", "The wisdom of cyclical time",
+    "The elder’s role in spiritual transitions", "The emotional clarity of death",
+    "The sacredness of letting go", "The wisdom of emotional detachment",
+    "The elder as a keeper of silence", "The final breath as a teacher",
+    "Crafting a life credo", "Practicing radical acceptance",
+    "Slow decision making", "Sacred use of time",
+    "Translating pain into purpose", "The economy of attention",
+    "Spiritual minimalism", "Habit architecture for meaning",
+    "The ethics of retirement", "Art as elder expression",
+    "The apprenticeship model for living", "Cultivating moral imagination",
+    "The practice of nonreactivity", "Reclaiming playfulness in later years",
+    "Narrative reframing of life events", "The elder’s toolkit for resilience",
+    "Ritualizing birthdays and thresholds", "The practice of daily gratitude lists",
+    "Pilgrimage as inner mapping", "Stewarding family archives",
+    "The wisdom of seasonal wardrobes", "Financial dignity in aging",
+    "Curating a life library", "The slow art of letter writing",
+    "Language of blessing and benediction", "The art of ceremonial silence",
+    "Relearning wonder as routine", "The ethics of memory curation",
+    "Composting regrets into lessons", "The discipline of single-tasking",
+    "Sacred gardening as practice", "Dreamkeeping for families",
+    "The elder’s guide to technology with dignity", "The craft of apology and repair",
+    "Rituals for moving house gracefully", "The art of humble storytelling",
+    "Keeping small covenants", "Training attention like a muscle",
+    "The elder’s guide to curiosity", "Cultivating intergenerational humor",
+    "The poetics of slow meals", "The art of ceremonial forgiveness",
+    "Practicing witness presence", "The wisdom of seasonal fasting",
+    "Observing personal sabbaticals", "Everyday austerity as clarity practice",
+    "The ethics of legacy gifts", "Retelling origin stories",
+    "Rituals for welcoming grandchildren", "The practice of mindful consumption",
+    "Gentle defiance and principled stubbornness", "Aging with sartorial intention",
+    "The elder’s manual for mentoring artists", "Stewarding silence in families",
+    "Repairing ancestral ruptures", "Translating skill into teaching",
+    "The pedagogy of storytelling", "The art of unfinished projects",
+    "Holding rites of passage for adults", "Celebrating small victories",
+    "The elder’s role in cultural transmission", "Daily micro-practices for calm",
+    "The choreography of family dinners", "Wisdom in setting joint goals",
+    "The ritual of seasonal reading lists", "Practicing compassionate curiosity",
+    "Mapping personal myths", "The elder’s approach to modern grief",
+    "The craft of home altars", "Designing simple end-of-life wishes",
+    "The art of legacy playlists", "Curating photographs with intention",
+    "The science of restful sleep for elders", "Gentle movement as spiritual practice",
+    "Choosing a small circle of confidants", "Rituals for year-end reflection",
+    "The elder’s lesson in thrift and generosity", "Translating expertise into open-source wisdom",
+    "The practice of symbolic letting go", "Crafting family mottos",
+    "The gentleness of refusal rituals", "Teaching gratitude to children",
+    "The art of passing tools and skills", "Elder-led community learning pods",
+    "The wisdom of ordinary objects", "Rituals for healing sibling relationships",
+    "The discipline of a morning page practice", "The dignity of receiving care",
+    "Designing a farewell meal", "The elder’s guide to ethical wills",
+    "The art of listening to silence between words", "Cultivating patience with digital natives",
+    "Keeping seasonal recipes alive", "The ritual of returning to old places",
+    "Naming and tending personal liminal spaces", "The elder’s practice of eco-stewardship",
+    "Teaching sons and daughters emotional labor", "The craft of simple public speaking",
+    "Passing down secret family recipes", "Rituals for commemorating absent ones",
+    "The discipline of decluttering legacy", "The elder’s practice of curiosity-driven reading",
+    "Promoting gentle activism in later life", "Translating sorrow into songs",
+    "The art of making small amends daily", "Preparing a spiritual will",
+    "Rituals for welcoming change", "The elder’s role in neighborhood cohesion",
+    "Crafting pocket wisdom for grandchildren", "The practice of small, regular pilgrimages",
+    "The ethics of storytelling consent", "Building a family oral-history project",
+    "The elder’s handbook for seasonal grief", "Rituals for creative inheritance",
+    "The practice of rhythmic breathing for elders", "Teaching craft skills across generations",
+    "The art of public memory keeping", "Designing a meaningful last-day ritual",
+    "The elder’s role in ethical dispute mediation", "Practicing equanimity in public life",
+    "The wisdom of non-attachment to titles", "The art of dignified retreat from leadership",
+    "Rituals to honor teachers and mentors", "The practice of naming blessings aloud",
+    "Cultivating humility in achievement", "The elder’s role in fostering cultural humility",
+    "Tending to the body’s small sorrows", "The science and ritual of breathwork for restful aging",
+    "The art of witnessing creative failure", "The elder as curator of seasonal hymns",
+    "Rituals for marking medical transitions", "The practice of communal story-swap nights",
+    "Teaching financial humility and abundance", "The art of noticing without fixing",
+    "Practicing indebtedness as gratitude", "The elder’s manual for kindness economies",
+    "The practice of shared silence in grief", "Designing legacy gardens and memory walks",
+    "The craft of passing down scents and perfumes", "The discipline of gentle timekeeping",
+    "Rituals for celebrating non-achievement seasons", "The elder’s role in teaching ethical courage",
+    "The art of measured praise", "The practice of small daily reparations",
+    "Teaching young people the art of waiting", "Rituals for integrating loss into life stories",
+    "The elder’s handbook for companion animals", "The art of turning complaint into invitation",
+    "The practice of symbolic leaving-behinds", "Designing a family gratitude ritual",
+    "The elder’s role in local story archives", "The craft of seasonal soundscapes",
+    "Rituals for honoring body changes", "The practice of communal craft making",
+    "Teaching restraint as a form of generosity", "The elder’s guide to mentoring civic leaders",
+    "Rituals for mapping personal thresholds", "The art of bedside presence",
+    "Practicing reciprocity without expectation", "The elder’s role in preserving minority languages",
+    "The craft of quiet civic courage", "Rituals for passing on gardening lore",
+    "Teaching elders to ask for help gracefully", "The art of ceremonially ending jobs and roles",
+    "The practice of keeping a living will conversation", "The elder’s guide to ethical storytelling online",
+    "Rituals for ancestor honoring without dogma", "Teaching ritual improvisation to families",
+    "The art of passing on repair skills", "Rituals for making peace with physical decline",
+    "The practice of humor as elder medicine", "The elder’s craft of translating professional identity",
+    "Rituals for celebrating recovered joy", "The practice of daily intention-setting circles",
+    "The elder’s role in creating sanctuary spaces", "The art of small public acts of grace",
+    "The practice of turning expertise into mentorship pathways", "Rituals for quiet postpartum support among elders",
+    "The elder’s approach to interfaith blessing practices", "Teaching the craft of listening to landscapes",
+    "Rituals for intergenerational music-making", "The art of curating meaningful objects for heirs",
+    "The practice of naming regrets as teachers", "The elder’s role in guiding civic memory projects",
+    "Rituals for peaceful decision handovers", "Teaching ancestors’ crafts to urban youth",
+    "The art of celebrating slow milestones", "The practice of collaborative elder-child projects",
+    "The elder’s guide to peacekeeping in families", "Rituals for midlife reinvention guided by elders",
+    "The art of keeping one secret for the family", "The practice of mapping personal thresholds and gates",
+    "The elder’s role in ethical storytelling of history", "Rituals for guiding first-time parents",
+    "Teaching elders to wield gentle criticism", "The art of converting possessions into narratives",
+    "The practice of daily compassionate discipline", "The elder’s method for stewarding ancestral lands",
+    "Rituals for marking the end of caregiving roles", "Teaching the language of blessing to children",
+    "The art of weaving everyday metaphors into teaching", "The practice of tending friendships in old age",
+    "The elder’s guide to nonviolent communication coaching", "Rituals for welcoming solitude after loss",
+    "Teaching the practice of appreciative inquiry", "The art of dignified dependence",
+    "The practice of ceremonial gift giving", "The elder’s role in helping others write their obituaries",
+    "Rituals for mindful media consumption", "Teaching the craft of listening to silence in rituals",
+    "The art of tender correction", "The practice of mapping a life’s thresholds for heirs",
+    "The elder’s approach to cross-cultural mentoring", "Rituals for honoring lost youth and late bloomers",
+    "Teaching the art of framing regrets as maps", "The practice of ceremonial retirement from career identities",
+    "The elder’s method for holding public remembrance circles", "Rituals for joining new communities later in life",
+    "Teaching elders to cultivate modern friendships", "The art of passing on smell-memory practices",
+    "The practice of planned absence as presence strategy", "The elder’s guide to leading reconciliation circles",
+    "Rituals for harvesting life lessons each season", "Teaching the practice of slow curiosity in the digital age",
+    "The art of creating living trust rituals", "The practice of mentoring through shared crafts",
+    "The elder’s role in teaching landscape literacy", "Rituals for honoring small beginnings and endings",
+    "Teaching the art of naming one’s blessings", "The practice of daily micro-ceremonies for presence",
+    "The elder’s guide to cultivating a sacred toolkit", "Rituals for translating career wisdom into life lessons",
+    "Teaching the craft of humble authorship", "The art of keeping a ceremonial map of life places",
+    "The practice of practicing less and being more", "The elder’s method for tending communal grief gardens",
+    "Rituals for transferring leadership with grace", "Teaching the practice of embodied apology",
+    "The art of passing on personal mottos and maxims", "The practice of ritualized daily farewells",
+    "The elder’s role in mentoring neighborhood stewards", "Rituals for reclaiming play after loss",
+    "Teaching the practice of small daily rites for the body", "The art of composing simple spiritual songs",
+    "The practice of leaving guided letters for future selves", "The elder’s guide to facilitating cross-generational dialogues",
+    "Rituals for marking transitions between care phases", "Teaching elders the craft of modern storytelling mediums",
+    "The art of curating a last-day soundtrack", "The practice of blessing the next generation before parting"
+]
+
+# ---------------- DB SETUP ----------------
+conn = sqlite3.connect(DB_FILE, isolation_level=None)
+cur = conn.cursor()
+cur.execute("""
+CREATE TABLE IF NOT EXISTS haiku (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    topic_id  INTEGER NOT NULL,
+    topic     TEXT    NOT NULL,
+    emotion   TEXT    NOT NULL,
+    haiku     TEXT    NOT NULL,
+    created   DATETIME DEFAULT CURRENT_TIMESTAMP
+""")
+conn.commit()
+
+# ---------------- WHERE ARE WE? ----------------
+row = cur.execute("SELECT MAX(topic_id) FROM haiku").fetchone()
+last = row[0] if row[0] is not None else 0
+next_id = last + 1
+if next_id > len(TOPICS):
+    total = cur.execute("SELECT COUNT(*) FROM haiku").fetchone()[0]
+    print(f"🎉  All {len(TOPICS)} topics completed ({total} haiku in DB).")
+    exit(0)
+
+topic = TOPICS[next_id - 1]
+
+# ---------------- BUILD PROMPT ----------------
+emotion_list = ", ".join(EMOTIONS)
+prompt = f"""You are a wise haiku poet.
+Topic: {topic}
+
+Write exactly twelve haiku—one for each of these emotions:
+{emotion_list}
+
+Rules:
+- 3 lines each, 5-7-5 syllables.
+- No titles, no numbering, no blank lines between poems.
+- Separate the twelve haiku with a single pipe character: |
+- Keep the order identical to the list above.
+"""
+
+# ---------------- CALL KIMI ----------------
+url = "https://api.moonshot.cn/v1/chat/completions"
+headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
+payload = {
+    "model": MODEL,
+    "temperature": TEMPERATURE,
+    "max_tokens": MAX_TOKENS,
+    "messages": [{"role": "user", "content": prompt}]
+}
+resp = requests.post(url, json=payload, headers=headers, timeout=60)
+if resp.status_code != 200:
+    print("❌  HTTP", resp.status_code, resp.text)
+    exit(1)
+text = resp.json()["choices"][0]["message"]["content"].strip()
+haikus = [h.strip() for h in text.split("|")]
+if len(haikus) != 12:
+    print("❌  Expected 12 haiku, got", len(haikus), text)
+    exit(1)
+
+# ---------------- STORE ----------------
+with conn:
+    for emotion, haiku in zip(EMOTIONS, haikus):
+        cur.execute("INSERT INTO haiku (topic_id, topic, emotion, haiku) VALUES (?,?,?,?)",
+                    (next_id, topic, emotion, haiku))
+
+print(f"✅  Topic {next_id} / {len(TOPICS)}  –  {topic}")
+# ---------------- SELF-RESTART ----------------
+time.sleep(1)
+os.execl(sys.executable, sys.executable, *sys.argv)
